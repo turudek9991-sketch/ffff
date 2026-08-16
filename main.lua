@@ -6424,7 +6424,7 @@ function BuildESPTab(UI,P_ESP)
 		end
 	)
 
-	B_EspBtn,B_SetEsp=UI.BuatToggle,"Show info on nearby boulders",Toggles.BoulderEsp)
+	local B_EspBtn,B_SetEsp=UI.BuatToggle(UI,P_ESP,"Boulder ESP","Show info on nearby boulders",Toggles.BoulderEsp)
 	B_EspBtn.MouseButton1Click:Connect(function()
 		local v=not Toggles.BoulderEsp; Toggles.BoulderEsp=v; B_SetEsp(v); Mountain.setBoulderEsp(v); saveConfig()
 	end)
