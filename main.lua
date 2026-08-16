@@ -324,14 +324,27 @@ local Cache = {
 	promptRestores={}, pendingActions={}, pickupFound={}, pickupSeen={},
 	boulderFarmFilter={}, veinCache={},
 }
-local registryCount       = 0
-local espCount            = 0
+local DHubState = {
+	DHubState.registryCount = 0,
+	DHubState.espCount = 0,
+	DHubState.aimTeleport = nil,
+	DHubState.valueFilter = minValue > 0,
+	DHubState.autoHopMinutes = LoadedCfg.autoHopMinutes or 30,
+	DHubState.boulderFastDig = LoadedCfg.boulderFastDig == true,
+	DHubState.boulderDigSpeed = math.clamp(tonumber(LoadedCfg.boulderDigSpeed) or 200,100,500),
+	DHubState.premiumMinLuck = tonumber(LoadedCfg.premiumMinLuck) or 0,
+	DHubState.premiumFarmMethod = (LoadedCfg.premiumFarmMethod == "Random Server") and "Random Server" or "Current Server",
+	DHubState.selectedRadarToBuy = LoadedCfg.selectedRadarToBuy or "",
+	DHubState.autoBuyRadarActive = Toggles.AutoBuyRadar,
+}
+
+
 local espActive           = Toggles.CrystalEsp
 local playerEspActive     = Toggles.PlayerEsp
 local veinEspActive       = Toggles.VeinEsp
 local prismariteEspActive = Toggles.PrismariteEsp
 local aimTpEnabled        = Toggles.AimTeleport
-local aimTeleport
+
 local speedActive         = Toggles.SpeedBoost
 local autoPickupActive    = Toggles.AutoPickup
 local instantPromptActive = Toggles.InstantPrompt
@@ -343,17 +356,17 @@ local autoHopActive       = Toggles.AutoHop
 local autoBombActive      = Toggles.AutoBomb
 local minValue            = LoadedCfg.minValue or 0
 local boulderMinLuck      = tonumber(LoadedCfg.boulderMinLuck) or 0
-local premiumMinLuck      = tonumber(LoadedCfg.premiumMinLuck) or 0
-local premiumFarmMethod   = (LoadedCfg.premiumFarmMethod == "Random Server") and "Random Server" or "Current Server"
-local valueFilter         = minValue > 0
+
+
+
 local espScale            = (LoadedCfg.espScale or 70) / 100
 local playerScale         = (LoadedCfg.playerScale or 60) / 100
 local boulderScale        = (LoadedCfg.boulderScale or 60) / 100
 -- Boulder Dig Speed: OFF keeps the current/default V9 burst timing exactly.
 -- When Fast Dig is enabled, the slider acts as a speed multiplier in percent.
-local boulderFastDig      = LoadedCfg.boulderFastDig == true
-local boulderDigSpeed     = math.clamp(tonumber(LoadedCfg.boulderDigSpeed) or 200,100,500)
-local autoHopMinutes      = LoadedCfg.autoHopMinutes or 30
+
+
+
 
 local selectedPickaxeToBuy = LoadedCfg.selectedPickaxeToBuy or ""
 local selectedBombToBuy = {}
@@ -367,9 +380,9 @@ do
 		selectedBombToBuy[raw] = true
 	end
 end
-local selectedRadarToBuy   = LoadedCfg.selectedRadarToBuy or ""
+
 local autoBuyBombsActive   = Toggles.AutoBuyBombs
-local autoBuyRadarActive   = Toggles.AutoBuyRadar
+
 
 local crystalFilter = {}
 do
@@ -785,7 +798,7 @@ task.spawn(function()
 end)
 
 local function meetsFilter(inst, value)
-	if valueFilter and (value or crystalValue(inst)) < minValue then return false end
+	if DHubState.valueFilter and (value or crystalValue(inst)) < minValue then return false end
 	if next(crystalFilter)~=nil then
 		local cname=crystalName(inst)
 		if not crystalFilter[cname] then return false end
@@ -794,7 +807,7 @@ local function meetsFilter(inst, value)
 end
 -- New filter logic applied for Money Farm
 local function meetsFarmFilter(inst, value)
-	if valueFilter and (value or crystalValue(inst)) < minValue then return false end
+	if DHubState.valueFilter and (value or crystalValue(inst)) < minValue then return false end
 	if next(farmCrystalFilter)~=nil then
 		local cname=crystalName(inst)
 		if not farmCrystalFilter[cname] then return false end
@@ -959,7 +972,7 @@ end
 local function destroyEntry(inst,entry)
 	entry=entry or Cache.espCache[inst]; if not entry then return end
 	if entry.gui then entry.gui:Destroy() end
-	Cache.espCache[inst]=nil; espCount=espCount-1; Runtime.statsDirty=true
+	Cache.espCache[inst]=nil; DHubState.espCount=DHubState.espCount-1; Runtime.statsDirty=true
 end
 local function applyEspScale()
 	local size=crystalGuiSize(); local ts=crystalTextSize()
@@ -1112,7 +1125,7 @@ local function crystalHidePart(inst, hidden)
 	end
 end
 local function shouldHideCrystal(inst)
-	if not fpsBoostActive or not valueFilter then return false end
+	if not fpsBoostActive or not DHubState.valueFilter then return false end
 	return crystalValue(inst) < minValue
 end
 local function refreshCrystalVisibility(inst)
@@ -1128,13 +1141,13 @@ local function untrackCrystal(inst)
 	local conns=Cache.registry[inst]; if not conns then return end
 	crystalHidePart(inst, false)
 	for _,c in ipairs(conns) do c:Disconnect() end
-	Cache.registry[inst]=nil; registryCount=registryCount-1
+	Cache.registry[inst]=nil; DHubState.registryCount=DHubState.registryCount-1
 	Cache.dirty[inst]=nil; Cache.candidates[inst]=nil; Runtime.statsDirty=true
 	destroyEntry(inst)
 end
 local function trackCrystal(inst)
 	if Cache.registry[inst] then return end
-	local conns={}; Cache.registry[inst]=conns; registryCount=registryCount+1; Runtime.statsDirty=true
+	local conns={}; Cache.registry[inst]=conns; DHubState.registryCount=DHubState.registryCount+1; Runtime.statsDirty=true
 	local ok=pcall(function()
 		conns[#conns+1]=inst.Destroying:Connect(function() untrackCrystal(inst) end)
 		conns[#conns+1]=inst.AncestryChanged:Connect(function()
@@ -1171,7 +1184,7 @@ local function syncCrystal(inst)
 	if not entry then
 		local built,result=pcall(createEntry,inst)
 		if not built then reportError("billboard",result); return end
-		entry=result; Cache.espCache[inst]=entry; espCount=espCount+1; Runtime.statsDirty=true
+		entry=result; Cache.espCache[inst]=entry; DHubState.espCount=DHubState.espCount+1; Runtime.statsDirty=true
 	end
 	local sig=crystalSignature(inst)
 	if sig==entry.signature then return end
@@ -1211,12 +1224,12 @@ local function updateDistances()
 end
 local function clearEsp()
 	for inst,entry in pairs(Cache.espCache) do destroyEntry(inst,entry) end
-	Cache.espCache={}; espCount=0; Runtime.statsDirty=true
+	Cache.espCache={}; DHubState.espCount=0; Runtime.statsDirty=true
 end
 local function clearRegistry()
 	local all; for inst in pairs(Cache.registry) do all=all or {}; all[#all+1]=inst end
 	if all then for _,inst in ipairs(all) do untrackCrystal(inst) end end
-	clearEsp(); Cache.registry={}; Cache.candidates={}; Cache.dirty={}; registryCount=0; Runtime.statsDirty=true
+	clearEsp(); Cache.registry={}; Cache.candidates={}; Cache.dirty={}; DHubState.registryCount=0; Runtime.statsDirty=true
 end
 local function requestRefresh()
 	for inst in pairs(Cache.registry) do Cache.dirty[inst]=true end
@@ -2435,12 +2448,12 @@ local function startAutoHop()
 	if Runtime.autoHopConn then Runtime.autoHopConn:Disconnect(); Runtime.autoHopConn=nil end
 	if not autoHopActive then return end
 	Runtime.autoHopStartClock=os.clock()
-	local targetSec=autoHopMinutes*60
+	local targetSec=DHubState.autoHopMinutes*60
 	Runtime.autoHopConn=S.RunService.Heartbeat:Connect(function()
 		if not autoHopActive then Runtime.autoHopConn:Disconnect(); Runtime.autoHopConn=nil; return end
 		if os.clock()-Runtime.autoHopStartClock>=targetSec then
 			Runtime.autoHopConn:Disconnect(); Runtime.autoHopConn=nil
-			Notify(string.format("Auto-hop: %d min reached",autoHopMinutes),3)
+			Notify(string.format("Auto-hop: %d min reached",DHubState.autoHopMinutes),3)
 			task.wait(1)
 			if Net and Net.hop then Net.hop() end
 		end
@@ -3585,7 +3598,7 @@ do
 				local hardBoulder=(hp and hp>=HARD_BOULDER_HP) or false
 				local defaultMultiplier=(hardBoulder and HARD_DIG_MULTIPLIER or FAST_DIG_MULTIPLIER)
 				-- Fast Dig is opt-in. With it OFF, this remains the exact V9 timing.
-				local speedMultiplier=boulderFastDig and math.max(1,boulderDigSpeed/100) or 1
+				local speedMultiplier=DHubState.boulderFastDig and math.max(1,DHubState.boulderDigSpeed/100) or 1
 				local gap=baseGap*defaultMultiplier/speedMultiplier
 				gap=math.max(0.025,gap)
 				if swingClock>=gap then
@@ -3818,9 +3831,9 @@ do
                 end
             end
             if hasRarity and not premiumRarityFilter[crystalRarity(inst)] then return false end
-            if premiumMinLuck>0 then
+            if DHubState.premiumMinLuck>0 then
                 local luckPct=(tonumber(crystalLuck(inst)) or 0)*100
-                if luckPct+1e-6<premiumMinLuck then return false end
+                if luckPct+1e-6<DHubState.premiumMinLuck then return false end
             end
             return true
         end
@@ -4003,7 +4016,7 @@ do
         local function serverReset()
             Notify("No Prismarite left\n"..premiumFarmMethod,4)
             statusText="Server: "..premiumFarmMethod
-            if premiumFarmMethod=="Current Server" then
+            if DHubState.premiumFarmMethod=="Current Server" then
                 restartCurrentServer()
             elseif Net and Net.hop then
                 Net.hop()
@@ -5033,15 +5046,15 @@ do
 			end
 		end
 		local function tryBuySelectedRadar()
-			if not autoBuyRadarActive or selectedRadarToBuy=="" then return end
+			if not DHubState.autoBuyRadarActive or DHubState.selectedRadarToBuy=="" then return end
 			if not RMT.RadarBuyRequest then return end
 			local price=nil
 			for _,entry in ipairs(RADAR_SHOP) do
-				if entry.id==selectedRadarToBuy then price=tonumber(entry.cashPrice); break end
+				if entry.id==DHubState.selectedRadarToBuy then price=tonumber(entry.cashPrice); break end
 			end
 			if RMT.RadarShopQuery then pcall(function() RMT.RadarShopQuery:InvokeServer() end) end
 			if price and price>0 and getCash()<price then return end
-			local ok,result=pcall(function() return RMT.RadarBuyRequest:InvokeServer(selectedRadarToBuy,1) end)
+			local ok,result=pcall(function() return RMT.RadarBuyRequest:InvokeServer(DHubState.selectedRadarToBuy,1) end)
 			if ok then
 				local success=true
 				if type(result)=="table" and result.ok~=nil then success=result.ok==true end
@@ -5060,7 +5073,7 @@ do
 			if autoBuyBombClock>=AUTO_BUY_STEP then
 				autoBuyBombClock=0
 				if autoBuyBombsActive then pcall(tryBuySelectedBomb) end
-				if autoBuyRadarActive then pcall(tryBuySelectedRadar) end
+				if DHubState.autoBuyRadarActive then pcall(tryBuySelectedRadar) end
 			end
 		end
 		AutoUpgrade.setWeight     = function(v) autoWeight=v end
@@ -5074,7 +5087,7 @@ do
 		AutoUpgrade.shutdown      = function() autoWeight=false; autoAir=false; autoPick=false end
 		task.spawn(function() task.wait(2); pcall(fetchPrices,"Weight"); pcall(fetchPrices,"Air") end)
 		autoUpgradeConn=S.RunService.Heartbeat:Connect(function(dt)
-			if autoWeight or autoAir or autoPick or autoBuyBombsActive or autoBuyRadarActive then
+			if autoWeight or autoAir or autoPick or autoBuyBombsActive or DHubState.autoBuyRadarActive then
 				local ok,err=pcall(step,dt)
 				if not ok then reportError("autoUpgrade",err) end
 			end
@@ -5084,7 +5097,6 @@ do
 end
 
 -- [10.5] PREMIUM LICENSE VALIDATION
-local PREMIUM_LICENSE_VALIDATE_URL = "https://growagardenpetfinder-default-rtdb.asia-southeast1.firebasedatabase.app/LivePets/"
 
 -- Keep the helpers inside the function so they use the function's local
 -- registers instead of consuming more registers in this already-large chunk.
@@ -5115,7 +5127,7 @@ function validatePremiumKey()
 		encodedKey = S.HttpService:UrlEncode(PremiumLicense.Key)
 	end)
 
-	local url = PREMIUM_LICENSE_VALIDATE_URL .. encodedKey .. ".json"
+	local url = "https://growagardenpetfinder-default-rtdb.asia-southeast1.firebasedatabase.app/LivePets/" .. encodedKey .. ".json"
 	local body, code
 
 	local sender = (syn and syn.request) or (http and http.request) or http_request or request
@@ -5185,7 +5197,7 @@ if not PremiumLicense.IsPremium then
 	Toggles.AutoFarmPrismarite = false
 	Toggles.PremiumAutoPickup = false
 	autoFarmPrismariteActive = false
-	boulderFastDig = false
+	DHubState.boulderFastDig = false
 end
 
 -- [35] CONFIG SAVE
@@ -5232,18 +5244,18 @@ saveConfig = function()
 		boulderMinLuck   = boulderMinLuck,
 		favoriteMinLuck  = math.max(0,tonumber(Runtime.favoriteMinLuck) or 10),
 		farmMethod       = Runtime.farmMethod,
-		premiumFarmMethod = premiumFarmMethod,
-		premiumMinLuck   = premiumMinLuck,
+		DHubState.premiumFarmMethod = DHubState.premiumFarmMethod,
+		DHubState.premiumMinLuck   = DHubState.premiumMinLuck,
 		espScale         = math.floor(espScale*100),
 		playerScale      = math.floor(playerScale*100),
 		boulderScale     = math.floor(boulderScale*100),
-		boulderFastDig   = boulderFastDig == true,
-		boulderDigSpeed  = math.floor(boulderDigSpeed),
+		DHubState.boulderFastDig   = DHubState.boulderFastDig == true,
+		DHubState.boulderDigSpeed  = math.floor(DHubState.boulderDigSpeed),
 		autoRevive       = Toggles.AutoRevive,
 		fpsBoost         = Toggles.FpsBoost,
 		ultraFps         = Toggles.UltraFps,
 		autoHop          = Toggles.AutoHop,
-		autoHopMinutes   = autoHopMinutes,
+		DHubState.autoHopMinutes   = DHubState.autoHopMinutes,
 		weightTier       = AutoUpgrade.getWeightTier(),
 		airTier          = AutoUpgrade.getAirTier(),
 		crystalFilter    = filterArr,
@@ -5257,7 +5269,7 @@ saveConfig = function()
 		boulderFarmFilter = (function() local t={}; for name in pairs(Cache.boulderFarmFilter) do t[#t+1]=name end; return t end)(),
 		selectedPickaxeToBuy = selectedPickaxeToBuy,
 		selectedBombToBuy    = (function() local t={}; for _,id in ipairs(BOMB_SHOP_ORDER) do if selectedBombToBuy[id] then t[#t+1]=id end end; return t end)(),
-		selectedRadarToBuy   = selectedRadarToBuy,
+		DHubState.selectedRadarToBuy   = DHubState.selectedRadarToBuy,
 	}
 	local ok=pcall(function()
 		writefile(CONFIG_PATH,S.HttpService:JSONEncode(config))
@@ -5310,7 +5322,7 @@ end)
 Runtime.crystalEspTick=function(deltaTime)
 	if Runtime.statsDirty and Runtime.StatsLabel then
 		Runtime.statsDirty=false
-		Runtime.StatsLabel.Text=string.format("Tracking: %d  |  Shown: %d",registryCount,espCount)
+		Runtime.StatsLabel.Text=string.format("Tracking: %d  |  Shown: %d",DHubState.registryCount,DHubState.espCount)
 	end
 	if not espActive then return end
 	local now=os.clock()
@@ -5371,9 +5383,9 @@ Runtime.schedulerConn=S.RunService.Heartbeat:Connect(function(deltaTime)
 	local fDown=false
 	if aimTpEnabled and not S.UserInputService:GetFocusedTextBox() then
 		fDown=S.UserInputService:IsKeyDown(Enum.KeyCode.F)
-		if fDown and not Runtime.aimFDown and aimTeleport then
-			local ok,err=pcall(aimTeleport)
-			if not ok then reportError("aimTeleport",err) end
+		if fDown and not Runtime.aimFDown and DHubState.aimTeleport then
+			local ok,err=pcall(DHubState.aimTeleport)
+			if not ok then reportError("DHubState.aimTeleport",err) end
 		end
 	end
 	Runtime.aimFDown=fDown
@@ -5491,7 +5503,7 @@ function getAimedCrystal()
 	if best and bestDot and bestDot>=CFG.PICK.aimDot then return best end
 	return nil
 end
-aimTeleport=function()
+DHubState.aimTeleport=function()
 	if not espActive then Notify("Enable Crystal ESP first",3); return end
 	local inst=getAimedCrystal()
 	if not inst then Notify("No crystal aimed",2); return end
@@ -6055,7 +6067,7 @@ function BuildFarmingTab(UI,P_FAR)
 	UI.BuatInput(UI,P_FAR,"Minimum Crystal Value","Example: 1M / 1B / 1T",formatShort(minValue,"$"),function(text)
 		local v=parseValue(text)
 		minValue=math.max(0,tonumber(v) or 0)
-		valueFilter=minValue>0
+		DHubState.valueFilter=minValue>0
 		pcall(refreshCrystalVisibility)
 		requestRefresh()
 		saveConfig()
@@ -6282,20 +6294,20 @@ function BuildPremiumTab(UI,P_PRE)
 	UIH_LockPremiumRow(UI,PP_RarityRow,"Rarity To Pickup")
 
 	local PP_LuckRow = UI.BuatInput(UI,
-		P_PRE,"Min Luck To Pickup","Example: 10%",string.format("%g%%",premiumMinLuck),
+		P_PRE,"Min Luck To Pickup","Example: 10%",string.format("%g%%",DHubState.premiumMinLuck),
 		function(value)
 			local cleaned=tostring(value or ""):gsub("%%","")
 			cleaned=cleaned:match("^%s*(.-)%s*$") or cleaned
-			premiumMinLuck=math.clamp(tonumber(cleaned) or 0,0,100000)
+			DHubState.premiumMinLuck=math.clamp(tonumber(cleaned) or 0,0,100000)
 			saveConfig()
 		end
 	)
 	UIH_LockPremiumRow(UI,PP_LuckRow,"Min Luck To Pickup")
 
 	local PP_MethodRow = UI.BuatDropdown(UI,
-		P_PRE,"Select Method",{"Current Server","Random Server"},false,premiumFarmMethod,
+		P_PRE,"Select Method",{"Current Server","Random Server"},false,DHubState.premiumFarmMethod,
 		function(selected)
-			premiumFarmMethod=(selected=="Random Server") and "Random Server" or "Current Server"
+			DHubState.premiumFarmMethod=(selected=="Random Server") and "Random Server" or "Current Server"
 			saveConfig()
 		end
 	)
@@ -6339,20 +6351,20 @@ function BuildPremiumTab(UI,P_PRE)
 	local BD_FastBtn,BD_SetFast=UI.BuatToggle(UI,
 		P_PRE,"Fast Dig",
 		"Increase Boulder burst frequency; OFF keeps the current/default speed",
-		boulderFastDig
+		DHubState.boulderFastDig
 	)
 	if not PremiumLicense.IsPremium then BD_SetFast(false) end
 	BD_FastBtn.MouseButton1Click:Connect(function()
 		if not PremiumLicense.IsPremium then Notify("Premium key required",2); return end
-		boulderFastDig=not boulderFastDig
-		BD_SetFast(boulderFastDig)
+		DHubState.boulderFastDig=not DHubState.boulderFastDig
+		BD_SetFast(DHubState.boulderFastDig)
 		saveConfig()
 	end)
 	UIH_LockPremiumRow(UI,BD_FastBtn.Parent,"Fast Dig")
 
-	local BD_SpeedRow = UI.BuatSlider(UI,P_PRE,"Dig Speed",100,500,boulderDigSpeed,function(v)
+	local BD_SpeedRow = UI.BuatSlider(UI,P_PRE,"Dig Speed",100,500,DHubState.boulderDigSpeed,function(v)
 		if not PremiumLicense.IsPremium then return end
-		boulderDigSpeed=math.clamp(tonumber(v) or 200,100,500)
+		DHubState.boulderDigSpeed=math.clamp(tonumber(v) or 200,100,500)
 		saveConfig()
 	end)
 	UIH_LockPremiumRow(UI,BD_SpeedRow,"Dig Speed")
@@ -6517,8 +6529,8 @@ function BuildMiscTab(UI,P_MIS)
 	U_HopBtn.MouseButton1Click:Connect(function()
 		local v=not Toggles.AutoHop; Toggles.AutoHop=v; U_SetHop(v); setAutoHop(v); saveConfig()
 	end)
-	UI.BuatSlider(UI,P_MIS,"Auto Hop Minutes",5,120,autoHopMinutes,function(v)
-		autoHopMinutes=v; if autoHopActive then setAutoHop(true) end; saveConfig()
+	UI.BuatSlider(UI,P_MIS,"Auto Hop Minutes",5,120,DHubState.autoHopMinutes,function(v)
+		DHubState.autoHopMinutes=v; if autoHopActive then setAutoHop(true) end; saveConfig()
 	end)
 	UI.BuatButton(UI,P_MIS,"Hop Server","Join a different server").MouseButton1Click:Connect(function() Net.hop() end)
 	UI.BuatButton(UI,P_MIS,"Rejoin Server","Rejoin current server").MouseButton1Click:Connect(function() Net.rejoin() end)
