@@ -5947,7 +5947,7 @@ function InitializeUI()
 	local TitleLbl=Instance.new("TextLabel",Header)
 	TitleLbl.Size=UDim2.new(1,-132,1,0); TitleLbl.Position=UDim2.new(0,46,0,0)
 	TitleLbl.BackgroundTransparency=1; TitleLbl.RichText=true
-	TitleLbl.Text="D-HUB: <font color='#EB3C3C'>MINE A MOUNTAIN</font> <font color='#888'>v3</font>"
+	TitleLbl.Text="D-HUB: <font color='#EB3C3C'>MINE A MOUNTAIN</font> <font color='#888'>v2.4</font>"
 	TitleLbl.TextColor3=C.TEXT_1; TitleLbl.Font=Enum.Font.GothamBold; TitleLbl.TextSize=14; TitleLbl.TextXAlignment=Enum.TextXAlignment.Left
 	H.MakeDraggable(UI,Root,Header)
 	local originalSize=Root.Size; local minimizedSize=UDim2.new(0,52,0,52)
@@ -6345,8 +6345,86 @@ function BuildPremiumTab(UI,P_PRE)
 		UI.BuatLabel(UI,P_PRE,"Premium features are locked. Set getgenv().key before loading the script.")
 	end
 end
+
+function BuildESPTab(UI,P_ESP)
+	UI.BuatSection(UI,P_ESP,"Player")
+	local P_PBtn,P_SetP=UI.BuatToggle(UI,P_ESP,"Player ESP","Show other players through walls",Toggles.PlayerEsp)
+	P_PBtn.MouseButton1Click:Connect(function()
+		playerEspActive=not playerEspActive; Toggles.PlayerEsp=playerEspActive; P_SetP(playerEspActive)
+		if not playerEspActive then clearPlayerEsp() end; saveConfig()
+	end)
+	UI.BuatSlider(UI,P_ESP,"Player Size",40,250,math.floor(playerScale*100),function(v) playerScale=v/100; applyPlayerScale(); saveConfig() end)
+
+	UI.BuatSection(UI,P_ESP,"Veins")
+	local veinEspDropRow, veinEspGetter, veinEspSetOptions = UI.BuatDropdown(UI,
+		P_ESP,"Vein To ESP",VeinsModule.getTrackedVeinNames(),true,
+		(function() local t={}; for k in pairs(veinEspFilter) do t[#t+1]=k end; return t end)(),
+		function(selected)
+			table.clear(veinEspFilter)
+			for _,v in ipairs(selected) do veinEspFilter[v]=true end
+			saveConfig()
+		end
 	)
-	local B_EspBtn,B_SetEsp=UI.BuatToggle(UI,P_ESP,"Boulder ESP","Show info on nearby boulders",Toggles.BoulderEsp)
+	local V_EspBtn,V_SetEsp=UI.BuatToggle(UI,P_ESP,"Vein ESP","Show ESP on all active Veins",Toggles.VeinEsp)
+	V_EspBtn.MouseButton1Click:Connect(function()
+		veinEspActive=not veinEspActive; Toggles.VeinEsp=veinEspActive; V_SetEsp(veinEspActive)
+		VeinsModule.setVeinEsp(veinEspActive); saveConfig()
+	end)
+
+	local PR_EspBtn,PR_SetEsp=UI.BuatToggle(UI,
+		P_ESP,"Prismarite ESP","Show Terrain WoodPlanks as Prismarite",Toggles.PrismariteEsp
+	)
+	local PR_StatsLbl=UI.BuatLabel(UI,P_ESP,"Prismarite: 0  |  Nearest: --  |  Farm: OFF")
+	Runtime.PrismariteEspSet=function(value)
+		prismariteEspActive=value==true
+		Toggles.PrismariteEsp=prismariteEspActive
+		PR_SetEsp(prismariteEspActive)
+		PrismariteModule.setActive(prismariteEspActive)
+	end
+	PR_EspBtn.MouseButton1Click:Connect(function()
+		Runtime.PrismariteEspSet(not prismariteEspActive)
+		saveConfig()
+	end)
+	task.spawn(function()
+		while PR_StatsLbl and PR_StatsLbl.Parent do
+			local root=getRoot()
+			local count,nearest=PrismariteModule.getStats(root and root.Position or nil)
+			local nearText=nearest and string.format("%dm",math.floor(nearest)) or "--"
+			local farmText=Toggles.AutoFarmPrismarite and "ACTIVE" or "OFF"
+			PR_StatsLbl.Text=string.format("Prismarite: %d  |  Nearest: %s  |  Farm: %s",count,nearText,farmText)
+			task.wait(0.35)
+		end
+	end)
+
+	UI.BuatSection(UI,P_ESP,"Crystals")
+	local crystalEspDropRow, crystalEspGetter, crystalEspSetOptions = UI.BuatDropdown(UI,
+		P_ESP,"Crystal To ESP",getTrackedCrystalNames(),true,
+		(function() local t={}; for k in pairs(crystalEspFilter) do t[#t+1]=k end; return t end)(),
+		function(selected)
+			table.clear(crystalEspFilter)
+			for _,v in ipairs(selected) do crystalEspFilter[v]=true end
+			requestRefresh(); saveConfig()
+		end
+	)
+	local C_EspBtn,C_SetEsp=UI.BuatToggle(UI,P_ESP,"Crystal ESP","Show ESP on all tracked crystals",Toggles.CrystalEsp)
+	C_EspBtn.MouseButton1Click:Connect(function()
+		espActive=not espActive; Toggles.CrystalEsp=espActive; C_SetEsp(espActive)
+		if not espActive then clearEsp() end; updateTracking(); saveConfig()
+	end)
+	UI.BuatSlider(UI,P_ESP,"Crystal/Vein Size",40,250,math.floor(espScale*100),function(v) espScale=v/100; applyEspScale(); VeinsModule.applyScale(); PrismariteModule.applyScale(); saveConfig() end)
+	Runtime.StatsLabel=UI.BuatLabel(UI,P_ESP,"Tracking: 0  |  Shown: 0")
+	UI.BuatSection(UI,P_ESP,"Boulders")
+	local boulderEspDropRow = UI.BuatDropdown(UI,
+		P_ESP,"Boulder To ESP",{"Mossite","Voltite","Gildrite","Rimeveil","Nocturnite"},true,
+		(function() local t={}; for k in pairs(boulderEspFilter) do t[#t+1]=k end; return t end)(),
+		function(selected)
+			table.clear(boulderEspFilter)
+			for _,v in ipairs(selected) do boulderEspFilter[v]=true end
+			saveConfig()
+		end
+	)
+
+	B_EspBtn,B_SetEsp=UI.BuatToggle,"Show info on nearby boulders",Toggles.BoulderEsp)
 	B_EspBtn.MouseButton1Click:Connect(function()
 		local v=not Toggles.BoulderEsp; Toggles.BoulderEsp=v; B_SetEsp(v); Mountain.setBoulderEsp(v); saveConfig()
 	end)
