@@ -5084,59 +5084,74 @@ do
 end
 
 -- [10.5] PREMIUM LICENSE VALIDATION
-local PREMIUM_DB_URL = "https://growagardenpetfinder-default-rtdb.asia-southeast1.firebasedatabase.app"
-local PREMIUM_KEY_PATH = "/LivePets/"
+local PREMIUM_LICENSE_VALIDATE_URL = "https://growagardenpetfinder-default-rtdb.asia-southeast1.firebasedatabase.app/LivePets/"
 
-local function readPremiumKey()
-	local env = (type(getgenv) == "function" and getgenv()) or _G
-	local value = nil
-	pcall(function() value = env.key end)
-	if value == nil then pcall(function() value = _G.key end) end
-	if value == nil then value = "" end
-	value = tostring(value)
-	value = value:match("^%s*(.-)%s*$") or value
-	return value
-end
-
-local function premiumHttpGet(url)
-	local sender = (syn and syn.request) or (http and http.request) or http_request or request
-	if type(sender) == "function" then
-		local ok, response = pcall(function()
-			return sender({Url=url, Method="GET"})
-		end)
-		if ok and type(response) == "table" then
-			local code = tonumber(response.StatusCode) or 0
-			if code >= 200 and code < 300 and type(response.Body) == "string" then
-				return response.Body, code
-			end
-			return nil, code
-		end
-	end
-
-	local ok, body = pcall(function() return game:HttpGet(url) end)
-	if ok and type(body) == "string" then return body, 200 end
-	return nil, 0
-end
-
-local function validatePremiumKey()
-	PremiumLicense.Key = readPremiumKey()
+-- Keep the helpers inside the function so they use the function's local
+-- registers instead of consuming more registers in this already-large chunk.
+function validatePremiumKey()
+	PremiumLicense.Key = ""
 	PremiumLicense.IsPremium = false
 	PremiumLicense.Checked = true
 	PremiumLicense.Error = nil
 
+	local env = (type(getgenv) == "function" and getgenv()) or _G
+	local value = nil
+	pcall(function() value = env.key end)
+	if value == nil then
+		pcall(function() value = _G.key end)
+	end
+	if value == nil then value = "" end
+
+	PremiumLicense.Key = tostring(value)
+	PremiumLicense.Key = PremiumLicense.Key:match("^%s*(.-)%s*$") or PremiumLicense.Key
+
 	-- Empty key is a normal Free account; do not make an HTTP request.
-	if PremiumLicense.Key == "" then return false end
+	if PremiumLicense.Key == "" then
+		return false
+	end
 
 	local encodedKey = PremiumLicense.Key
-	pcall(function() encodedKey = S.HttpService:UrlEncode(PremiumLicense.Key) end)
-	local url = PREMIUM_DB_URL .. PREMIUM_KEY_PATH .. encodedKey .. ".json"
-	local body, code = premiumHttpGet(url)
+	pcall(function()
+		encodedKey = S.HttpService:UrlEncode(PremiumLicense.Key)
+	end)
+
+	local url = PREMIUM_LICENSE_VALIDATE_URL .. encodedKey .. ".json"
+	local body, code
+
+	local sender = (syn and syn.request) or (http and http.request) or http_request or request
+	if type(sender) == "function" then
+		local ok, response = pcall(function()
+			return sender({
+				Url = url,
+				Method = "GET"
+			})
+		end)
+		if ok and type(response) == "table" then
+			code = tonumber(response.StatusCode) or 0
+			if code >= 200 and code < 300 and type(response.Body) == "string" then
+				body = response.Body
+			end
+		end
+	end
+
+	if body == nil then
+		local ok, responseBody = pcall(function()
+			return game:HttpGet(url)
+		end)
+		if ok and type(responseBody) == "string" then
+			body = responseBody
+			code = 200
+		end
+	end
+
 	if type(body) ~= "string" then
 		PremiumLicense.Error = "Firebase HTTP " .. tostring(code or 0)
 		return false
 	end
 
-	local ok, data = pcall(function() return S.HttpService:JSONDecode(body) end)
+	local ok, data = pcall(function()
+		return S.HttpService:JSONDecode(body)
+	end)
 	if not ok then
 		PremiumLicense.Error = "Firebase JSON error"
 		return false
@@ -5147,7 +5162,7 @@ local function validatePremiumKey()
 	-- LivePets/KEY = {active=true}
 	-- LivePets/KEY = {valid=true}
 	-- LivePets/KEY = {premium=true}
-	local valid = (data == true)
+	local valid = data == true
 	if type(data) == "table" then
 		valid = data.active == true or data.valid == true or data.premium == true
 	end
@@ -5156,6 +5171,7 @@ local function validatePremiumKey()
 	if not PremiumLicense.IsPremium then
 		PremiumLicense.Error = "Key not found or inactive"
 	end
+
 	return PremiumLicense.IsPremium
 end
 
