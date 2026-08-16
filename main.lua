@@ -9,16 +9,6 @@ if __DHubEnv.__DHubMineMountainActive then
 end
 __DHubEnv.__DHubMineMountainActive=true
 
--- [0.5] PREMIUM LICENSE / KEY STATE
--- Key is supplied by the loader through getgenv().key (or _G.key).
--- Firebase stores each key directly under /LivePets/<KEY>.
-local PremiumLicense = {
-	Key = "",
-	IsPremium = false,
-	Checked = false,
-	Error = nil,
-}
-
 -- D-HUB: MINE A MOUNTAIN — v2.4.14 (Boulder Fast Dig control + clean Premium UI)
 -- ============================================================
 -- [1] SERVICES
@@ -324,27 +314,14 @@ local Cache = {
 	promptRestores={}, pendingActions={}, pickupFound={}, pickupSeen={},
 	boulderFarmFilter={}, veinCache={},
 }
-local DHubState = {
-	registryCount = 0,
-	espCount = 0,
-	aimTeleport = nil,
-	valueFilter = false,
-	autoHopMinutes = LoadedCfg.autoHopMinutes or 30,
-	boulderFastDig = LoadedCfg.boulderFastDig == true,
-	boulderDigSpeed = math.clamp(tonumber(LoadedCfg.boulderDigSpeed) or 200,100,500),
-	premiumMinLuck = tonumber(LoadedCfg.premiumMinLuck) or 0,
-	premiumFarmMethod = (LoadedCfg.premiumFarmMethod == "Random Server") and "Random Server" or "Current Server",
-	selectedRadarToBuy = LoadedCfg.selectedRadarToBuy or "",
-	autoBuyRadarActive = Toggles.AutoBuyRadar,
-}
-
-
+local registryCount       = 0
+local espCount            = 0
 local espActive           = Toggles.CrystalEsp
 local playerEspActive     = Toggles.PlayerEsp
 local veinEspActive       = Toggles.VeinEsp
 local prismariteEspActive = Toggles.PrismariteEsp
 local aimTpEnabled        = Toggles.AimTeleport
-
+local aimTeleport
 local speedActive         = Toggles.SpeedBoost
 local autoPickupActive    = Toggles.AutoPickup
 local instantPromptActive = Toggles.InstantPrompt
@@ -355,19 +332,18 @@ local fpsBoostActive      = Toggles.FpsBoost
 local autoHopActive       = Toggles.AutoHop
 local autoBombActive      = Toggles.AutoBomb
 local minValue            = LoadedCfg.minValue or 0
-DHubState.valueFilter = minValue > 0
 local boulderMinLuck      = tonumber(LoadedCfg.boulderMinLuck) or 0
-
-
-
+local premiumMinLuck      = tonumber(LoadedCfg.premiumMinLuck) or 0
+local premiumFarmMethod   = (LoadedCfg.premiumFarmMethod == "Random Server") and "Random Server" or "Current Server"
+local valueFilter         = minValue > 0
 local espScale            = (LoadedCfg.espScale or 70) / 100
 local playerScale         = (LoadedCfg.playerScale or 60) / 100
 local boulderScale        = (LoadedCfg.boulderScale or 60) / 100
 -- Boulder Dig Speed: OFF keeps the current/default V9 burst timing exactly.
 -- When Fast Dig is enabled, the slider acts as a speed multiplier in percent.
-
-
-
+local boulderFastDig      = LoadedCfg.boulderFastDig == true
+local boulderDigSpeed     = math.clamp(tonumber(LoadedCfg.boulderDigSpeed) or 200,100,500)
+local autoHopMinutes      = LoadedCfg.autoHopMinutes or 30
 
 local selectedPickaxeToBuy = LoadedCfg.selectedPickaxeToBuy or ""
 local selectedBombToBuy = {}
@@ -381,9 +357,9 @@ do
 		selectedBombToBuy[raw] = true
 	end
 end
-
+local selectedRadarToBuy   = LoadedCfg.selectedRadarToBuy or ""
 local autoBuyBombsActive   = Toggles.AutoBuyBombs
-
+local autoBuyRadarActive   = Toggles.AutoBuyRadar
 
 local crystalFilter = {}
 do
@@ -481,7 +457,63 @@ local Runtime = {
 	autoDigLastFire = 0,
 	AutoDigButton = nil, AutoDigSet = nil,
 	FarmMethodButton = nil, FarmMethodGet = nil, FarmMethodSet = nil,
+	PremiumIsValid = false,
+	PremiumKey = "",
+	PremiumChecked = false,
+	PremiumError = nil,
 }
+
+-- ============================================================
+-- PREMIUM KEY VALIDATION
+-- Uses the existing Runtime/S tables so the original script's
+-- top-level local-register budget is not increased.
+-- Firebase format:
+--   /LivePets/TEST-001 = true
+-- ============================================================
+function validatePremiumKey()
+	Runtime.PremiumIsValid=false
+	Runtime.PremiumChecked=true
+	Runtime.PremiumError=nil
+	Runtime.PremiumKey=""
+
+	local env=(type(getgenv)=="function" and getgenv()) or _G
+	local key=nil
+	pcall(function() key=env.key end)
+	if key==nil then pcall(function() key=_G.key end) end
+	key=tostring(key or ""):match("^%s*(.-)%s*$") or ""
+	Runtime.PremiumKey=key
+	if key=="" then return false end
+
+	local encoded=key
+	pcall(function() encoded=S.HttpService:UrlEncode(key) end)
+
+	local body
+	local ok,response=pcall(function()
+		return game:HttpGet("https://growagardenpetfinder-default-rtdb.asia-southeast1.firebasedatabase.app/LivePets/"..encoded..".json")
+	end)
+	if not ok or type(response)~="string" then
+		Runtime.PremiumError="Firebase request failed"
+		return false
+	end
+	body=response
+
+	local decoded
+	local jsonOK,jsonValue=pcall(function()
+		return S.HttpService:JSONDecode(body)
+	end)
+	if jsonOK then decoded=jsonValue end
+
+	local valid=(decoded==true) or body:match("^%s*true%s*$")~=nil
+	if type(decoded)=="table" then
+		valid=decoded.active==true or decoded.valid==true or decoded.premium==true
+	end
+
+	Runtime.PremiumIsValid=valid==true
+	if not Runtime.PremiumIsValid then
+		Runtime.PremiumError="Key not found or inactive"
+	end
+	return Runtime.PremiumIsValid
+end
 
 -- Boulder/Vein coordination: a bomb-required notification blocks the current Boulder.
 -- Auto Bomb clears this flag only after the vein is verified gone.
@@ -799,7 +831,7 @@ task.spawn(function()
 end)
 
 local function meetsFilter(inst, value)
-	if DHubState.valueFilter and (value or crystalValue(inst)) < minValue then return false end
+	if valueFilter and (value or crystalValue(inst)) < minValue then return false end
 	if next(crystalFilter)~=nil then
 		local cname=crystalName(inst)
 		if not crystalFilter[cname] then return false end
@@ -808,7 +840,7 @@ local function meetsFilter(inst, value)
 end
 -- New filter logic applied for Money Farm
 local function meetsFarmFilter(inst, value)
-	if DHubState.valueFilter and (value or crystalValue(inst)) < minValue then return false end
+	if valueFilter and (value or crystalValue(inst)) < minValue then return false end
 	if next(farmCrystalFilter)~=nil then
 		local cname=crystalName(inst)
 		if not farmCrystalFilter[cname] then return false end
@@ -973,7 +1005,7 @@ end
 local function destroyEntry(inst,entry)
 	entry=entry or Cache.espCache[inst]; if not entry then return end
 	if entry.gui then entry.gui:Destroy() end
-	Cache.espCache[inst]=nil; DHubState.espCount=DHubState.espCount-1; Runtime.statsDirty=true
+	Cache.espCache[inst]=nil; espCount=espCount-1; Runtime.statsDirty=true
 end
 local function applyEspScale()
 	local size=crystalGuiSize(); local ts=crystalTextSize()
@@ -1126,7 +1158,7 @@ local function crystalHidePart(inst, hidden)
 	end
 end
 local function shouldHideCrystal(inst)
-	if not fpsBoostActive or not DHubState.valueFilter then return false end
+	if not fpsBoostActive or not valueFilter then return false end
 	return crystalValue(inst) < minValue
 end
 local function refreshCrystalVisibility(inst)
@@ -1142,13 +1174,13 @@ local function untrackCrystal(inst)
 	local conns=Cache.registry[inst]; if not conns then return end
 	crystalHidePart(inst, false)
 	for _,c in ipairs(conns) do c:Disconnect() end
-	Cache.registry[inst]=nil; DHubState.registryCount=DHubState.registryCount-1
+	Cache.registry[inst]=nil; registryCount=registryCount-1
 	Cache.dirty[inst]=nil; Cache.candidates[inst]=nil; Runtime.statsDirty=true
 	destroyEntry(inst)
 end
 local function trackCrystal(inst)
 	if Cache.registry[inst] then return end
-	local conns={}; Cache.registry[inst]=conns; DHubState.registryCount=DHubState.registryCount+1; Runtime.statsDirty=true
+	local conns={}; Cache.registry[inst]=conns; registryCount=registryCount+1; Runtime.statsDirty=true
 	local ok=pcall(function()
 		conns[#conns+1]=inst.Destroying:Connect(function() untrackCrystal(inst) end)
 		conns[#conns+1]=inst.AncestryChanged:Connect(function()
@@ -1185,7 +1217,7 @@ local function syncCrystal(inst)
 	if not entry then
 		local built,result=pcall(createEntry,inst)
 		if not built then reportError("billboard",result); return end
-		entry=result; Cache.espCache[inst]=entry; DHubState.espCount=DHubState.espCount+1; Runtime.statsDirty=true
+		entry=result; Cache.espCache[inst]=entry; espCount=espCount+1; Runtime.statsDirty=true
 	end
 	local sig=crystalSignature(inst)
 	if sig==entry.signature then return end
@@ -1225,12 +1257,12 @@ local function updateDistances()
 end
 local function clearEsp()
 	for inst,entry in pairs(Cache.espCache) do destroyEntry(inst,entry) end
-	Cache.espCache={}; DHubState.espCount=0; Runtime.statsDirty=true
+	Cache.espCache={}; espCount=0; Runtime.statsDirty=true
 end
 local function clearRegistry()
 	local all; for inst in pairs(Cache.registry) do all=all or {}; all[#all+1]=inst end
 	if all then for _,inst in ipairs(all) do untrackCrystal(inst) end end
-	clearEsp(); Cache.registry={}; Cache.candidates={}; Cache.dirty={}; DHubState.registryCount=0; Runtime.statsDirty=true
+	clearEsp(); Cache.registry={}; Cache.candidates={}; Cache.dirty={}; registryCount=0; Runtime.statsDirty=true
 end
 local function requestRefresh()
 	for inst in pairs(Cache.registry) do Cache.dirty[inst]=true end
@@ -2449,12 +2481,12 @@ local function startAutoHop()
 	if Runtime.autoHopConn then Runtime.autoHopConn:Disconnect(); Runtime.autoHopConn=nil end
 	if not autoHopActive then return end
 	Runtime.autoHopStartClock=os.clock()
-	local targetSec=DHubState.autoHopMinutes*60
+	local targetSec=autoHopMinutes*60
 	Runtime.autoHopConn=S.RunService.Heartbeat:Connect(function()
 		if not autoHopActive then Runtime.autoHopConn:Disconnect(); Runtime.autoHopConn=nil; return end
 		if os.clock()-Runtime.autoHopStartClock>=targetSec then
 			Runtime.autoHopConn:Disconnect(); Runtime.autoHopConn=nil
-			Notify(string.format("Auto-hop: %d min reached",DHubState.autoHopMinutes),3)
+			Notify(string.format("Auto-hop: %d min reached",autoHopMinutes),3)
 			task.wait(1)
 			if Net and Net.hop then Net.hop() end
 		end
@@ -3599,7 +3631,7 @@ do
 				local hardBoulder=(hp and hp>=HARD_BOULDER_HP) or false
 				local defaultMultiplier=(hardBoulder and HARD_DIG_MULTIPLIER or FAST_DIG_MULTIPLIER)
 				-- Fast Dig is opt-in. With it OFF, this remains the exact V9 timing.
-				local speedMultiplier=DHubState.boulderFastDig and math.max(1,DHubState.boulderDigSpeed/100) or 1
+				local speedMultiplier=boulderFastDig and math.max(1,boulderDigSpeed/100) or 1
 				local gap=baseGap*defaultMultiplier/speedMultiplier
 				gap=math.max(0.025,gap)
 				if swingClock>=gap then
@@ -3832,9 +3864,9 @@ do
                 end
             end
             if hasRarity and not premiumRarityFilter[crystalRarity(inst)] then return false end
-            if DHubState.premiumMinLuck>0 then
+            if premiumMinLuck>0 then
                 local luckPct=(tonumber(crystalLuck(inst)) or 0)*100
-                if luckPct+1e-6<DHubState.premiumMinLuck then return false end
+                if luckPct+1e-6<premiumMinLuck then return false end
             end
             return true
         end
@@ -4017,7 +4049,7 @@ do
         local function serverReset()
             Notify("No Prismarite left\n"..premiumFarmMethod,4)
             statusText="Server: "..premiumFarmMethod
-            if DHubState.premiumFarmMethod=="Current Server" then
+            if premiumFarmMethod=="Current Server" then
                 restartCurrentServer()
             elseif Net and Net.hop then
                 Net.hop()
@@ -5047,15 +5079,15 @@ do
 			end
 		end
 		local function tryBuySelectedRadar()
-			if not DHubState.autoBuyRadarActive or DHubState.selectedRadarToBuy=="" then return end
+			if not autoBuyRadarActive or selectedRadarToBuy=="" then return end
 			if not RMT.RadarBuyRequest then return end
 			local price=nil
 			for _,entry in ipairs(RADAR_SHOP) do
-				if entry.id==DHubState.selectedRadarToBuy then price=tonumber(entry.cashPrice); break end
+				if entry.id==selectedRadarToBuy then price=tonumber(entry.cashPrice); break end
 			end
 			if RMT.RadarShopQuery then pcall(function() RMT.RadarShopQuery:InvokeServer() end) end
 			if price and price>0 and getCash()<price then return end
-			local ok,result=pcall(function() return RMT.RadarBuyRequest:InvokeServer(DHubState.selectedRadarToBuy,1) end)
+			local ok,result=pcall(function() return RMT.RadarBuyRequest:InvokeServer(selectedRadarToBuy,1) end)
 			if ok then
 				local success=true
 				if type(result)=="table" and result.ok~=nil then success=result.ok==true end
@@ -5074,7 +5106,7 @@ do
 			if autoBuyBombClock>=AUTO_BUY_STEP then
 				autoBuyBombClock=0
 				if autoBuyBombsActive then pcall(tryBuySelectedBomb) end
-				if DHubState.autoBuyRadarActive then pcall(tryBuySelectedRadar) end
+				if autoBuyRadarActive then pcall(tryBuySelectedRadar) end
 			end
 		end
 		AutoUpgrade.setWeight     = function(v) autoWeight=v end
@@ -5088,117 +5120,13 @@ do
 		AutoUpgrade.shutdown      = function() autoWeight=false; autoAir=false; autoPick=false end
 		task.spawn(function() task.wait(2); pcall(fetchPrices,"Weight"); pcall(fetchPrices,"Air") end)
 		autoUpgradeConn=S.RunService.Heartbeat:Connect(function(dt)
-			if autoWeight or autoAir or autoPick or autoBuyBombsActive or DHubState.autoBuyRadarActive then
+			if autoWeight or autoAir or autoPick or autoBuyBombsActive or autoBuyRadarActive then
 				local ok,err=pcall(step,dt)
 				if not ok then reportError("autoUpgrade",err) end
 			end
 		end)
 	end
 	install()
-end
-
--- [10.5] PREMIUM LICENSE VALIDATION
-
--- Keep the helpers inside the function so they use the function's local
--- registers instead of consuming more registers in this already-large chunk.
-function validatePremiumKey()
-	PremiumLicense.Key = ""
-	PremiumLicense.IsPremium = false
-	PremiumLicense.Checked = true
-	PremiumLicense.Error = nil
-
-	local env = (type(getgenv) == "function" and getgenv()) or _G
-	local value = nil
-	pcall(function() value = env.key end)
-	if value == nil then
-		pcall(function() value = _G.key end)
-	end
-	if value == nil then value = "" end
-
-	PremiumLicense.Key = tostring(value)
-	PremiumLicense.Key = PremiumLicense.Key:match("^%s*(.-)%s*$") or PremiumLicense.Key
-
-	-- Empty key is a normal Free account; do not make an HTTP request.
-	if PremiumLicense.Key == "" then
-		return false
-	end
-
-	local encodedKey = PremiumLicense.Key
-	pcall(function()
-		encodedKey = S.HttpService:UrlEncode(PremiumLicense.Key)
-	end)
-
-	local url = "https://growagardenpetfinder-default-rtdb.asia-southeast1.firebasedatabase.app/LivePets/" .. encodedKey .. ".json"
-	local body, code
-
-	local sender = (syn and syn.request) or (http and http.request) or http_request or request
-	if type(sender) == "function" then
-		local ok, response = pcall(function()
-			return sender({
-				Url = url,
-				Method = "GET"
-			})
-		end)
-		if ok and type(response) == "table" then
-			code = tonumber(response.StatusCode) or 0
-			if code >= 200 and code < 300 and type(response.Body) == "string" then
-				body = response.Body
-			end
-		end
-	end
-
-	if body == nil then
-		local ok, responseBody = pcall(function()
-			return game:HttpGet(url)
-		end)
-		if ok and type(responseBody) == "string" then
-			body = responseBody
-			code = 200
-		end
-	end
-
-	if type(body) ~= "string" then
-		PremiumLicense.Error = "Firebase HTTP " .. tostring(code or 0)
-		return false
-	end
-
-	local ok, data = pcall(function()
-		return S.HttpService:JSONDecode(body)
-	end)
-	if not ok then
-		PremiumLicense.Error = "Firebase JSON error"
-		return false
-	end
-
-	-- Supported Firebase formats:
-	-- LivePets/KEY = true
-	-- LivePets/KEY = {active=true}
-	-- LivePets/KEY = {valid=true}
-	-- LivePets/KEY = {premium=true}
-	local valid = data == true
-	if type(data) == "table" then
-		valid = data.active == true or data.valid == true or data.premium == true
-	end
-
-	PremiumLicense.IsPremium = valid == true
-	if not PremiumLicense.IsPremium then
-		PremiumLicense.Error = "Key not found or inactive"
-	end
-
-	return PremiumLicense.IsPremium
-end
-
--- Validate before the UI is created so Premium never briefly runs while the
--- Firebase check is still pending. A network failure safely falls back to Free.
-pcall(validatePremiumKey)
-
--- A previously saved Premium config must never activate Premium while the
--- current key is invalid/missing. Existing non-Premium logic is untouched.
-if not PremiumLicense.IsPremium then
-	Toggles.AutoFarmPrismarite = false
-	Toggles.PremiumAutoPickup = false
-	autoFarmPrismariteActive = false
-	DHubState.boulderFastDig = false
 end
 
 -- [35] CONFIG SAVE
@@ -5245,18 +5173,18 @@ saveConfig = function()
 		boulderMinLuck   = boulderMinLuck,
 		favoriteMinLuck  = math.max(0,tonumber(Runtime.favoriteMinLuck) or 10),
 		farmMethod       = Runtime.farmMethod,
-		premiumFarmMethod = DHubState.premiumFarmMethod,
-		premiumMinLuck = DHubState.premiumMinLuck,
+		premiumFarmMethod = premiumFarmMethod,
+		premiumMinLuck   = premiumMinLuck,
 		espScale         = math.floor(espScale*100),
 		playerScale      = math.floor(playerScale*100),
 		boulderScale     = math.floor(boulderScale*100),
-		boulderFastDig = DHubState.boulderFastDig == true,
-		boulderDigSpeed = math.floor(DHubState.boulderDigSpeed),
+		boulderFastDig   = boulderFastDig == true,
+		boulderDigSpeed  = math.floor(boulderDigSpeed),
 		autoRevive       = Toggles.AutoRevive,
 		fpsBoost         = Toggles.FpsBoost,
 		ultraFps         = Toggles.UltraFps,
 		autoHop          = Toggles.AutoHop,
-		autoHopMinutes = DHubState.autoHopMinutes,
+		autoHopMinutes   = autoHopMinutes,
 		weightTier       = AutoUpgrade.getWeightTier(),
 		airTier          = AutoUpgrade.getAirTier(),
 		crystalFilter    = filterArr,
@@ -5270,7 +5198,7 @@ saveConfig = function()
 		boulderFarmFilter = (function() local t={}; for name in pairs(Cache.boulderFarmFilter) do t[#t+1]=name end; return t end)(),
 		selectedPickaxeToBuy = selectedPickaxeToBuy,
 		selectedBombToBuy    = (function() local t={}; for _,id in ipairs(BOMB_SHOP_ORDER) do if selectedBombToBuy[id] then t[#t+1]=id end end; return t end)(),
-		selectedRadarToBuy = DHubState.selectedRadarToBuy,
+		selectedRadarToBuy   = selectedRadarToBuy,
 	}
 	local ok=pcall(function()
 		writefile(CONFIG_PATH,S.HttpService:JSONEncode(config))
@@ -5323,7 +5251,7 @@ end)
 Runtime.crystalEspTick=function(deltaTime)
 	if Runtime.statsDirty and Runtime.StatsLabel then
 		Runtime.statsDirty=false
-		Runtime.StatsLabel.Text=string.format("Tracking: %d  |  Shown: %d",DHubState.registryCount,DHubState.espCount)
+		Runtime.StatsLabel.Text=string.format("Tracking: %d  |  Shown: %d",registryCount,espCount)
 	end
 	if not espActive then return end
 	local now=os.clock()
@@ -5384,9 +5312,9 @@ Runtime.schedulerConn=S.RunService.Heartbeat:Connect(function(deltaTime)
 	local fDown=false
 	if aimTpEnabled and not S.UserInputService:GetFocusedTextBox() then
 		fDown=S.UserInputService:IsKeyDown(Enum.KeyCode.F)
-		if fDown and not Runtime.aimFDown and DHubState.aimTeleport then
-			local ok,err=pcall(DHubState.aimTeleport)
-			if not ok then reportError("DHubState.aimTeleport",err) end
+		if fDown and not Runtime.aimFDown and aimTeleport then
+			local ok,err=pcall(aimTeleport)
+			if not ok then reportError("aimTeleport",err) end
 		end
 	end
 	Runtime.aimFDown=fDown
@@ -5504,7 +5432,7 @@ function getAimedCrystal()
 	if best and bestDot and bestDot>=CFG.PICK.aimDot then return best end
 	return nil
 end
-DHubState.aimTeleport=function()
+aimTeleport=function()
 	if not espActive then Notify("Enable Crystal ESP first",3); return end
 	local inst=getAimedCrystal()
 	if not inst then Notify("No crystal aimed",2); return end
@@ -5890,31 +5818,6 @@ function UIH_BuatShopDropdown(UI,parent, label, items, defaultId, callback)
 		return row
 	end
 
--- Premium-only visual lock. This is intentionally local to Premium UI so
--- existing Farming/ESP/Shop/Teleport/Misc controls keep their old behavior.
-local function UIH_LockPremiumRow(UI, row, label)
-	if PremiumLicense.IsPremium then return end
-	if not row or not row:IsA("GuiObject") then return end
-	local blocker = Instance.new("TextButton")
-	blocker.Name = "PremiumLockedOverlay"
-	blocker.Size = UDim2.new(1,0,1,0)
-	blocker.Position = UDim2.new(0,0,0,0)
-	blocker.BackgroundTransparency = 1
-	blocker.BorderSizePixel = 0
-	blocker.Text = "LOCKED"
-	blocker.TextColor3 = UI.C.TEXT_3
-	blocker.Font = Enum.Font.GothamBold
-	blocker.TextSize = 10
-	blocker.TextXAlignment = Enum.TextXAlignment.Right
-	blocker.TextYAlignment = Enum.TextYAlignment.Center
-	blocker.AutoButtonColor = false
-	blocker.ZIndex = 100
-	blocker.Parent = row
-	blocker.MouseButton1Click:Connect(function()
-		Notify("Premium key required", 2)
-	end)
-end
-
 UIHelpers={
 	Corner=UIH_Corner,
 	Stroke=UIH_Stroke,
@@ -5933,6 +5836,25 @@ UIHelpers={
 	BuatShopDropdown=UIH_BuatShopDropdown,
 }
 
+function UIH_LockPremiumRow(UI,row)
+	if Runtime.PremiumIsValid or not row then return end
+	local blocker=Instance.new("TextButton",row)
+	blocker.Size=UDim2.new(1,0,1,0)
+	blocker.Position=UDim2.new(0,0,0,0)
+	blocker.BackgroundColor3=UI.C.BASE
+	blocker.BackgroundTransparency=0.18
+	blocker.BorderSizePixel=0
+	blocker.Text="LOCKED"
+	blocker.TextColor3=UI.C.TEXT_2
+	blocker.Font=Enum.Font.GothamBold
+	blocker.TextSize=10
+	blocker.AutoButtonColor=false
+	blocker.ZIndex=50
+	pcall(function() UIH_Corner(UI,blocker,6) end)
+	blocker.MouseButton1Click:Connect(function()
+		Notify("Premium key required",2)
+	end)
+end
 
 function InitializeUI()
 	local C={
@@ -6026,7 +5948,7 @@ function InitializeUI()
 	NameLbl.TextColor3=C.TEXT_1; NameLbl.Font=Enum.Font.GothamBold; NameLbl.TextSize=11; NameLbl.TextXAlignment=Enum.TextXAlignment.Left
 	local PremiumLbl=Instance.new("TextLabel",ProfileContainer)
 	PremiumLbl.Size=UDim2.new(1,-60,0,14); PremiumLbl.Position=UDim2.new(0,56,0.5,2)
-	PremiumLbl.BackgroundTransparency=1; PremiumLbl.Text=PremiumLicense.IsPremium and "Premium" or "Free"
+	PremiumLbl.BackgroundTransparency=1; PremiumLbl.Text=Runtime.PremiumIsValid and "Premium" or "Free"
 	PremiumLbl.TextColor3=C.ACCENT; PremiumLbl.Font=Enum.Font.GothamMedium; PremiumLbl.TextSize=10; PremiumLbl.TextXAlignment=Enum.TextXAlignment.Left
 	local ContentArea=Instance.new("Frame",Body)
 	ContentArea.Size=UDim2.new(1,-155,1,0); ContentArea.Position=UDim2.new(0,155,0,0); ContentArea.BackgroundTransparency=1
@@ -6068,7 +5990,7 @@ function BuildFarmingTab(UI,P_FAR)
 	UI.BuatInput(UI,P_FAR,"Minimum Crystal Value","Example: 1M / 1B / 1T",formatShort(minValue,"$"),function(text)
 		local v=parseValue(text)
 		minValue=math.max(0,tonumber(v) or 0)
-		DHubState.valueFilter=minValue>0
+		valueFilter=minValue>0
 		pcall(refreshCrystalVisibility)
 		requestRefresh()
 		saveConfig()
@@ -6283,60 +6205,63 @@ function BuildFarmingTab(UI,P_FAR)
 function BuildPremiumTab(UI,P_PRE)
 	UI.BuatSection(UI,P_PRE,"Premium Prismarite Farm")
 
-	local PP_RarityRow = UI.BuatDropdown(UI,
+	local PP_RarityRow=UI.BuatDropdown(UI,
 		P_PRE,"Rarity To Pickup",RARITY_LIST,true,
 		(function() local t={}; for k in pairs(premiumRarityFilter) do t[#t+1]=k end; return t end)(),
 		function(selected)
+			if not Runtime.PremiumIsValid then Notify("Premium key required",2); return end
 			table.clear(premiumRarityFilter)
 			for _,v in ipairs(selected) do premiumRarityFilter[v]=true end
 			saveConfig()
 		end
 	)
-	UIH_LockPremiumRow(UI,PP_RarityRow,"Rarity To Pickup")
+	UIH_LockPremiumRow(UI,PP_RarityRow)
 
-	local PP_LuckRow = UI.BuatInput(UI,
-		P_PRE,"Min Luck To Pickup","Example: 10%",string.format("%g%%",DHubState.premiumMinLuck),
+	local PP_LuckRow=UI.BuatInput(UI,
+		P_PRE,"Min Luck To Pickup","Example: 10%",string.format("%g%%",premiumMinLuck),
 		function(value)
+			if not Runtime.PremiumIsValid then Notify("Premium key required",2); return end
 			local cleaned=tostring(value or ""):gsub("%%","")
 			cleaned=cleaned:match("^%s*(.-)%s*$") or cleaned
-			DHubState.premiumMinLuck=math.clamp(tonumber(cleaned) or 0,0,100000)
+			premiumMinLuck=math.clamp(tonumber(cleaned) or 0,0,100000)
 			saveConfig()
 		end
 	)
-	UIH_LockPremiumRow(UI,PP_LuckRow,"Min Luck To Pickup")
+	UIH_LockPremiumRow(UI,PP_LuckRow)
 
-	local PP_MethodRow = UI.BuatDropdown(UI,
-		P_PRE,"Select Method",{"Current Server","Random Server"},false,DHubState.premiumFarmMethod,
+	local PP_MethodRow=UI.BuatDropdown(UI,
+		P_PRE,"Select Method",{"Current Server","Random Server"},false,premiumFarmMethod,
 		function(selected)
-			DHubState.premiumFarmMethod=(selected=="Random Server") and "Random Server" or "Current Server"
+			if not Runtime.PremiumIsValid then Notify("Premium key required",2); return end
+			premiumFarmMethod=(selected=="Random Server") and "Random Server" or "Current Server"
 			saveConfig()
 		end
 	)
-	UIH_LockPremiumRow(UI,PP_MethodRow,"Select Method")
+	UIH_LockPremiumRow(UI,PP_MethodRow)
 
 	local PP_PickBtn,PP_SetPick=UI.BuatToggle(UI,
 		P_PRE,"Auto Pickup Crystal",
 		"Pick crystals inside the active Prismarite area using the selected filter",
 		Toggles.PremiumAutoPickup
 	)
-	if not PremiumLicense.IsPremium then PP_SetPick(false) end
+	if not Runtime.PremiumIsValid then PP_SetPick(false) end
 	PP_PickBtn.MouseButton1Click:Connect(function()
-		if not PremiumLicense.IsPremium then Notify("Premium key required",2); return end
+		if not Runtime.PremiumIsValid then Notify("Premium key required",2); return end
 		local v=not Toggles.PremiumAutoPickup
 		Toggles.PremiumAutoPickup=v
 		PP_SetPick(v)
 		saveConfig()
 	end)
-	UIH_LockPremiumRow(UI,PP_PickBtn.Parent,"Auto Pickup Crystal")
+	UIH_LockPremiumRow(UI,PP_PickBtn.Parent)
 
 	local PP_FarmBtn,PP_SetFarm=UI.BuatToggle(UI,
 		P_PRE,"Auto Farm Prismarite",
 		"Scan the terrain, fly to each Prismarite area, dig it out, then continue",
 		Toggles.AutoFarmPrismarite
 	)
-	if not PremiumLicense.IsPremium then PP_SetFarm(false) end
+	if not Runtime.PremiumIsValid then PP_SetFarm(false) end
 	PP_FarmBtn.MouseButton1Click:Connect(function()
-		if not PremiumLicense.IsPremium then Notify("Premium key required",2); return end
+		if not Runtime.PremiumIsValid then Notify("Premium key required",2); return end
 		local v=not Toggles.AutoFarmPrismarite
 		Toggles.AutoFarmPrismarite=v
 		autoFarmPrismariteActive=v
@@ -6345,35 +6270,115 @@ function BuildPremiumTab(UI,P_PRE)
 		Runtime.PrismariteFarmActive=v
 		saveConfig()
 	end)
-	UIH_LockPremiumRow(UI,PP_FarmBtn.Parent,"Auto Farm Prismarite")
+	UIH_LockPremiumRow(UI,PP_FarmBtn.Parent)
 
 	UI.BuatSection(UI,P_PRE,"Boulder Dig Speed")
 
 	local BD_FastBtn,BD_SetFast=UI.BuatToggle(UI,
 		P_PRE,"Fast Dig",
 		"Increase Boulder burst frequency; OFF keeps the current/default speed",
-		DHubState.boulderFastDig
+		boulderFastDig
 	)
-	if not PremiumLicense.IsPremium then BD_SetFast(false) end
+	if not Runtime.PremiumIsValid then BD_SetFast(false) end
 	BD_FastBtn.MouseButton1Click:Connect(function()
-		if not PremiumLicense.IsPremium then Notify("Premium key required",2); return end
-		DHubState.boulderFastDig=not DHubState.boulderFastDig
-		BD_SetFast(DHubState.boulderFastDig)
+		if not Runtime.PremiumIsValid then Notify("Premium key required",2); return end
+		boulderFastDig=not boulderFastDig
+		BD_SetFast(boulderFastDig)
 		saveConfig()
 	end)
-	UIH_LockPremiumRow(UI,BD_FastBtn.Parent,"Fast Dig")
+	UIH_LockPremiumRow(UI,BD_FastBtn.Parent)
 
-	local BD_SpeedRow = UI.BuatSlider(UI,P_PRE,"Dig Speed",100,500,DHubState.boulderDigSpeed,function(v)
-		if not PremiumLicense.IsPremium then return end
-		DHubState.boulderDigSpeed=math.clamp(tonumber(v) or 200,100,500)
+	local BD_SpeedRow=UI.BuatSlider(UI,P_PRE,"Dig Speed",100,500,boulderDigSpeed,function(v)
+		if not Runtime.PremiumIsValid then Notify("Premium key required",2); return end
+		boulderDigSpeed=math.clamp(tonumber(v) or 200,100,500)
 		saveConfig()
 	end)
-	UIH_LockPremiumRow(UI,BD_SpeedRow,"Dig Speed")
-
-	if not PremiumLicense.IsPremium then
-		UI.BuatLabel(UI,P_PRE,"Premium features are locked. Set getgenv().key before loading the script.")
-	end
+	UIH_LockPremiumRow(UI,BD_SpeedRow)
 end
+
+function BuildShopTab(UI,P_SHP)
+	UI.BuatSection(UI,P_SHP,"Auto Buy Pickaxe")
+	UI.BuatShopDropdown(UI,P_SHP,"Pickaxe To Buy",PICKAXE_SHOP,selectedPickaxeToBuy,function(id)
+		selectedPickaxeToBuy=id; saveConfig()
+	end)
+	local AU_PBtn,AU_SetP=UI.BuatToggle(UI,P_SHP,"Auto Buy Pickaxe","Buy selected pickaxe when affordable",Toggles.AutoBuyPick)
+	AU_PBtn.MouseButton1Click:Connect(function()
+		local v=not Toggles.AutoBuyPick; Toggles.AutoBuyPick=v; AU_SetP(v); AutoUpgrade.setAutoPick(v); saveConfig()
+	end)
+	UI.BuatSection(UI,P_SHP,"Auto Upgrades")
+	UI.BuatStepSelect(UI,P_SHP,"Weight Upgrade",AutoUpgrade.getWeightTier(),function(v)
+		AutoUpgrade.setWeightTier(v); saveConfig()
+	end)
+	local AU_WBtn,AU_SetW=UI.BuatToggle(UI,P_SHP,"Auto Weight Upgrade","Spend cash upgrading carry weight",Toggles.AutoWeightUpgrade)
+	AU_WBtn.MouseButton1Click:Connect(function()
+		local v=not Toggles.AutoWeightUpgrade; Toggles.AutoWeightUpgrade=v; AU_SetW(v); AutoUpgrade.setWeight(v); saveConfig()
+	end)
+	UI.BuatStepSelect(UI,P_SHP,"Warm Upgrade",AutoUpgrade.getAirTier(),function(v)
+		AutoUpgrade.setAirTier(v); saveConfig()
+	end)
+	local AU_ABtn,AU_SetA=UI.BuatToggle(UI,P_SHP,"Auto Warm Upgrade","Spend cash upgrading warmth",Toggles.AutoAirUpgrade)
+	AU_ABtn.MouseButton1Click:Connect(function()
+		local v=not Toggles.AutoAirUpgrade; Toggles.AutoAirUpgrade=v; AU_SetA(v); AutoUpgrade.setAir(v); saveConfig()
+	end)
+	UI.BuatSection(UI,P_SHP,"Auto Buy Bombs")
+	local bombShopItems={}
+	for _,id in ipairs(BOMB_SHOP_ORDER) do
+		local cfg=BOMB_CONFIG[id]
+		if cfg then bombShopItems[#bombShopItems+1]={id=id,displayName=cfg.displayName,cashPrice=cfg.cashPrice} end
+	end
+	do
+		local options={}
+		local displayToId={}
+		local idToDisplay={}
+		for _,item in ipairs(bombShopItems) do
+			local display=item.displayName.."  ["..formatShort(item.cashPrice,"$").."]"
+			options[#options+1]=display
+			displayToId[display]=item.id
+			idToDisplay[item.id]=display
+		end
+		local defaults={}
+		for _,id in ipairs(BOMB_SHOP_ORDER) do
+			if selectedBombToBuy[id] and idToDisplay[id] then defaults[#defaults+1]=idToDisplay[id] end
+		end
+		local _,_,_,setSelected = UI.BuatDropdown(UI,P_SHP,"Bombs To Buy",options,true,defaults,function(values)
+			table.clear(selectedBombToBuy)
+			for _,display in ipairs(values) do
+				local id=displayToId[display]
+				if id then selectedBombToBuy[id]=true end
+			end
+			saveConfig()
+		end)
+	end
+	local ABB_Btn,ABB_Set=UI.BuatToggle(UI,P_SHP,"Auto Buy Bombs","Buy selected bomb when affordable",Toggles.AutoBuyBombs,UI.C.BOMB)
+	ABB_Btn.MouseButton1Click:Connect(function()
+		local v=not Toggles.AutoBuyBombs; Toggles.AutoBuyBombs=v; ABB_Set(v); autoBuyBombsActive=v; saveConfig()
+	end)
+	UI.BuatSection(UI,P_SHP,"Auto Buy Radar")
+	UI.BuatShopDropdown(UI,P_SHP,"Radar To Buy",RADAR_SHOP,selectedRadarToBuy,function(id)
+		selectedRadarToBuy=id; saveConfig()
+	end)
+	local ABR_Btn,ABR_Set=UI.BuatToggle(UI,P_SHP,"Auto Buy Radar","Buy selected radar automatically",Toggles.AutoBuyRadar,UI.C.SHOP)
+	ABR_Btn.MouseButton1Click:Connect(function()
+		local v=not Toggles.AutoBuyRadar; Toggles.AutoBuyRadar=v; ABR_Set(v); autoBuyRadarActive=v; saveConfig()
+	end)
+	-- Standalone Auto Favorite Item: inventory-only, unrelated to farming/pickup/rune logic.
+	UI.BuatSection(UI,P_SHP,"Auto Favorite Item")
+	UI.BuatInput(UI,P_SHP,"Minimum Luck","Enter Luck %",string.format("%g%%",Runtime.favoriteMinLuck),Runtime.setFavoriteMinLuck)
+	ABR_Btn,ABR_Set = UI.BuatToggle(UI,P_SHP,"Auto Favorite Item","Favorite crystals at or above Min Luck",Toggles.AutoFavoriteItem)
+	ToggleSetFn.AutoFavoriteItem=ABR_Set
+	ABR_Btn.MouseButton1Click:Connect(function()
+	Runtime.toggleFavoriteItem()
+end)
+	UI.BuatButton(UI,P_SHP,"Unfavorite All Crystal","Unfavorite all crystals").MouseButton1Click:Connect(function()
+		Runtime.unfavoriteAllCrystalItems()
+	end)
+
+	UI.BuatSection(UI,P_SHP,"Inventory")
+	UI.BuatButton(UI,P_SHP,"Sell All","Sell non-favorited items").MouseButton1Click:Connect(function()
+		if doSell() then Notify("Selling non-favorited items",2) end
+	end)
+
+	end
 
 function BuildESPTab(UI,P_ESP)
 	UI.BuatSection(UI,P_ESP,"Player")
@@ -6383,7 +6388,7 @@ function BuildESPTab(UI,P_ESP)
 		if not playerEspActive then clearPlayerEsp() end; saveConfig()
 	end)
 	UI.BuatSlider(UI,P_ESP,"Player Size",40,250,math.floor(playerScale*100),function(v) playerScale=v/100; applyPlayerScale(); saveConfig() end)
-
+	
 	UI.BuatSection(UI,P_ESP,"Veins")
 	local veinEspDropRow, veinEspGetter, veinEspSetOptions = UI.BuatDropdown(UI,
 		P_ESP,"Vein To ESP",VeinsModule.getTrackedVeinNames(),true,
@@ -6452,7 +6457,6 @@ function BuildESPTab(UI,P_ESP)
 			saveConfig()
 		end
 	)
-
 	local B_EspBtn,B_SetEsp=UI.BuatToggle(UI,P_ESP,"Boulder ESP","Show info on nearby boulders",Toggles.BoulderEsp)
 	B_EspBtn.MouseButton1Click:Connect(function()
 		local v=not Toggles.BoulderEsp; Toggles.BoulderEsp=v; B_SetEsp(v); Mountain.setBoulderEsp(v); saveConfig()
@@ -6530,8 +6534,8 @@ function BuildMiscTab(UI,P_MIS)
 	U_HopBtn.MouseButton1Click:Connect(function()
 		local v=not Toggles.AutoHop; Toggles.AutoHop=v; U_SetHop(v); setAutoHop(v); saveConfig()
 	end)
-	UI.BuatSlider(UI,P_MIS,"Auto Hop Minutes",5,120,DHubState.autoHopMinutes,function(v)
-		DHubState.autoHopMinutes=v; if autoHopActive then setAutoHop(true) end; saveConfig()
+	UI.BuatSlider(UI,P_MIS,"Auto Hop Minutes",5,120,autoHopMinutes,function(v)
+		autoHopMinutes=v; if autoHopActive then setAutoHop(true) end; saveConfig()
 	end)
 	UI.BuatButton(UI,P_MIS,"Hop Server","Join a different server").MouseButton1Click:Connect(function() Net.hop() end)
 	UI.BuatButton(UI,P_MIS,"Rejoin Server","Rejoin current server").MouseButton1Click:Connect(function() Net.rejoin() end)
@@ -6545,6 +6549,14 @@ function BuildTabsUI(UI)
 	BuildESPTab(UI,UI.Pages.ESP)
 	BuildTeleportTab(UI,UI.Pages.Teleport)
 	BuildMiscTab(UI,UI.Pages.Misc)
+end
+
+pcall(validatePremiumKey)
+if not Runtime.PremiumIsValid then
+	Toggles.PremiumAutoPickup=false
+	Toggles.AutoFarmPrismarite=false
+	autoFarmPrismariteActive=false
+	boulderFastDig=false
 end
 
 InitializeUI()
@@ -6564,7 +6576,7 @@ end
 
 if Toggles.BoulderEsp then Mountain.setBoulderEsp(true) end
 if Toggles.AutoFarmBoulders then Farm.setTargets(Cache.boulderFarmFilter); Farm.setActive(true) end
-if PremiumLicense.IsPremium and Toggles.AutoFarmPrismarite then
+if Runtime.PremiumIsValid and Toggles.AutoFarmPrismarite then
 	autoFarmPrismariteActive=true
 	PremiumPrismarite.setActive(true)
 end
