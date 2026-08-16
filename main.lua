@@ -325,17 +325,17 @@ local Cache = {
 	boulderFarmFilter={}, veinCache={},
 }
 local DHubState = {
-	DHubState.registryCount = 0,
-	DHubState.espCount = 0,
-	DHubState.aimTeleport = nil,
-	DHubState.valueFilter = minValue > 0,
-	DHubState.autoHopMinutes = LoadedCfg.autoHopMinutes or 30,
-	DHubState.boulderFastDig = LoadedCfg.boulderFastDig == true,
-	DHubState.boulderDigSpeed = math.clamp(tonumber(LoadedCfg.boulderDigSpeed) or 200,100,500),
-	DHubState.premiumMinLuck = tonumber(LoadedCfg.premiumMinLuck) or 0,
-	DHubState.premiumFarmMethod = (LoadedCfg.premiumFarmMethod == "Random Server") and "Random Server" or "Current Server",
-	DHubState.selectedRadarToBuy = LoadedCfg.selectedRadarToBuy or "",
-	DHubState.autoBuyRadarActive = Toggles.AutoBuyRadar,
+	registryCount = 0,
+	espCount = 0,
+	aimTeleport = nil,
+	valueFilter = false,
+	autoHopMinutes = LoadedCfg.autoHopMinutes or 30,
+	boulderFastDig = LoadedCfg.boulderFastDig == true,
+	boulderDigSpeed = math.clamp(tonumber(LoadedCfg.boulderDigSpeed) or 200,100,500),
+	premiumMinLuck = tonumber(LoadedCfg.premiumMinLuck) or 0,
+	premiumFarmMethod = (LoadedCfg.premiumFarmMethod == "Random Server") and "Random Server" or "Current Server",
+	selectedRadarToBuy = LoadedCfg.selectedRadarToBuy or "",
+	autoBuyRadarActive = Toggles.AutoBuyRadar,
 }
 
 
@@ -355,6 +355,7 @@ local fpsBoostActive      = Toggles.FpsBoost
 local autoHopActive       = Toggles.AutoHop
 local autoBombActive      = Toggles.AutoBomb
 local minValue            = LoadedCfg.minValue or 0
+DHubState.valueFilter = minValue > 0
 local boulderMinLuck      = tonumber(LoadedCfg.boulderMinLuck) or 0
 
 
